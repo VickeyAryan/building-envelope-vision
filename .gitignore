@@ -5,8 +5,7 @@ __pycache__/
 data/*
 !data/.gitkeep
 
-models/*.pt
-!models/.gitkeep
+models/best_model_partial_backup.pt
 
 .streamlit/
 *.log

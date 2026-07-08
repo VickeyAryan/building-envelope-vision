@@ -103,33 +103,35 @@ Upload a building facade photo → view the segmented overlay (window/wall/shadi
 
 ## Results
 
-Initial local CPU smoke-training run (not the final model — a short, reduced-resolution, reduced-dataset run on a subset of the 606 images just to confirm the pipeline learns end-to-end; CPU training was interrupted partway through the planned 10 epochs, so this reflects roughly 1 epoch over 150 training images at 224×224, batch size 8, Adam lr 1e-4):
+Full training run on Google Colab (T4 GPU): 606 images (378 train / 114 val / 114 test), 384×384, 60 epochs, batch size 8, Adam lr 1e-4, using `notebooks/train_segmentation.ipynb`.
 
-Evaluated on the full 114-image held-out test split (`python src/evaluate.py --image-size 224`):
+Evaluated on the full 114-image held-out test split (`python src/evaluate.py --image-size 384`):
 
 | Metric | Value |
 |---|---|
-| Pixel accuracy | 0.475 |
-| Mean IoU | 0.157 |
+| Pixel accuracy | 0.717 |
+| Mean IoU | 0.438 |
 
 | Class | IoU |
 |---|---|
-| facade | 0.527 |
-| window | 0.332 |
-| pillar | 0.308 |
-| door | 0.256 |
-| shop | 0.177 |
-| blind | 0.125 |
-| sill | 0.100 |
-| cornice | 0.062 |
-| balcony | 0.003 |
-| deco | 0.002 |
-| molding | 0.000 |
-| background | 0.000 |
+| facade | 0.702 |
+| door | 0.623 |
+| window | 0.589 |
+| pillar | 0.497 |
+| sill | 0.441 |
+| blind | 0.426 |
+| cornice | 0.378 |
+| balcony | 0.361 |
+| shop | 0.343 |
+| deco | 0.268 |
+| molding | 0.188 |
+| background | n/a (no background pixels in the test split) |
 
-Facade and window — the two classes WWR depends on most — already separate reasonably well after minimal training, which is a good sign for the approach. Rare/small classes (molding, deco, balcony, background) haven't been learned yet at this training budget.
+Facade, door, and window — the classes WWR depends on most — segment well. Small/rare decorative classes (molding, deco) are still the weakest, as expected given how little facade area they typically cover.
 
-`src/train.py --resume <checkpoint>` continues training from a saved checkpoint, so a longer run can be chained across multiple sessions. For a production-quality model, run the full 606-image dataset at 384×384 for 20+ epochs on a GPU via `notebooks/train_segmentation.ipynb` (Colab), then re-run `python src/evaluate.py` and update this table.
+Earlier local CPU-only smoke run (kept for reference, not representative of the model's real capability): 150 training images, 224×224, ~1 epoch — pixel accuracy 0.475, mean IoU 0.157. The jump to full-dataset/full-resolution/60-epoch GPU training roughly tripled mean IoU, confirming the extra training budget mattered far more than any pipeline issue.
+
+`src/train.py --resume <checkpoint>` can continue training from any saved checkpoint if you want to push these numbers further.
 
 ## What This Project Demonstrates
 

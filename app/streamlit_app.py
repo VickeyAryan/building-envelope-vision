@@ -123,9 +123,14 @@ def main():
     counts = None
     detection_image = None
     if detector is not None:
-        results = detector.predict(resized_image, conf=DETECT_CONF, verbose=False)[0]
+        # Run on the original image, not the square-cropped `resized_image` --
+        # that resize forces a fixed aspect ratio for the segmentation model,
+        # which distorts objects and measurably hurts detection (verified:
+        # dropped a real detection to zero on a test image). YOLO handles
+        # arbitrary aspect ratios natively, so it doesn't need that resize.
+        results = detector.predict(image, conf=DETECT_CONF, verbose=False)[0]
         counts = count_detections(results, conf=DETECT_CONF)
-        detection_image = draw_detections(resized_image, results)
+        detection_image = draw_detections(image, results)
 
     if detection_image is not None:
         col1, col2, col3 = st.columns(3)

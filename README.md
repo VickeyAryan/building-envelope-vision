@@ -1,6 +1,6 @@
 # Building Facade Energy-Relevance Analyzer
 
-A computer vision project that analyzes building facade photos to estimate visually-derivable indicators relevant to building energy performance — primarily **window-to-wall ratio (WWR)**, alongside supporting metrics like wall tone (solar absorptance proxy) and shading coverage — using semantic segmentation.
+A computer vision project that analyzes building facade photos to estimate visually-derivable indicators relevant to building energy performance — primarily **window-to-wall ratio (WWR)**, alongside supporting metrics like wall tone (solar absorptance proxy) and shading coverage — using semantic segmentation. A second model adds **window/door counting** via object detection.
 
 ## Problem Statement
 
@@ -14,6 +14,8 @@ This builds on the same core technique (transfer learning, PyTorch) as the Fabri
 - **Window-to-Wall Ratio (WWR)** — window pixel area ÷ total facade pixel area
 - **Wall tone / solar absorptance proxy** — average brightness of wall-class pixels (darker walls absorb more heat)
 - **Shading coverage proxy** — balcony/cornice pixel area near windows, as a rough indicator of passive shading
+- **Window & door counts** — how many distinct windows/doors are visible, via a separate object-detection model (see [Window & Door Counting](#window--door-counting) below)
+- **Average window size** — WWR ÷ window count, a relative (not absolute) indicator of whether a facade has many small windows or few large ones
 
 **Not derivable from a single photo (explicitly out of scope):**
 - Building orientation (needs GPS/compass data or multiple facade views)
@@ -36,30 +38,51 @@ dataset = load_dataset("Xpitfire/cmp_facade")
 ```
 - Also available on Kaggle (`adlteam/facade-dataset`) as an alternative source
 
+**Window/Door Detection Dataset** (for counting — see [Window & Door Counting](#window--door-counting))
+- 324 images (276 train / 48 valid), bounding-box labels for 4 classes: building, door, gate, window
+- Source: ["building, door, gate, window"](https://universe.roboflow.com/facade-features/building-door-gate-window) by Facade Features, Roboflow Universe, CC BY 4.0 (see `data/window_door_detection/ATTRIBUTION.md`)
+- Vendored directly in this repo (Git LFS) under `data/window_door_detection/`, unlike the CMP dataset — Roboflow requires a personal account/API key to download, so committing the files keeps `git clone` self-contained for everyone
+
 ## Approach
 
-- **Task type**: semantic segmentation (pixel-level classification), not whole-image classification
-- **Model**: fine-tune a pretrained **DeepLabV3** (ResNet backbone, built into `torchvision`) on the CMP facade labels
+- **Task type**: semantic segmentation (pixel-level classification) for WWR/wall-tone/shading, plus object detection (bounding boxes) for window/door counting — two different tasks needing two different model types, not one model doing both
+- **Segmentation model**: fine-tune a pretrained **DeepLabV3** (ResNet backbone, built into `torchvision`) on the CMP facade labels
+- **Detection model**: fine-tune a pretrained **YOLOv8-nano** (via `ultralytics`) on the window/door detection dataset
 - **Training environment**: Google Colab (free GPU); local machine for data prep, inference, and the demo app
-- **Framework**: PyTorch + torchvision
+- **Framework**: PyTorch + torchvision (segmentation), Ultralytics YOLO (detection)
+
+## Window & Door Counting
+
+Semantic segmentation labels *pixels*, not *objects* — it can tell you what fraction of a facade is window, but not how many separate windows there are (a row of 10 windows and one giant window can look identical in pixel-area terms). Counting individual objects needs a different technique: object detection, which draws one box per object.
+
+We initially tried deriving counts from the segmentation model's own masks (grouping connected "window" pixels into blobs), but testing this on real CMP ground-truth masks produced nonsense — e.g. 73 separate "door" blobs in one photo, because CMP's labels are broad semantic shapes, not per-object outlines. So counting uses a second, independently-trained model (YOLOv8) on a purpose-built bounding-box dataset instead.
+
+**Known limitation**: the detection dataset sometimes annotates one multi-pane window or glass door as several sub-boxes (one per pane) rather than one box per window a person would count. This means counts can run high on glass-heavy/modern facades — a real limitation of the source annotations, not the model.
 
 ## Project Structure
 
 ```
 building-envelope-vision/
-├── data/                     # downloaded CMP dataset (gitignored)
+├── data/
+│   └── window_door_detection/     # vendored detection dataset (Git LFS) + ATTRIBUTION.md
+│                                   # (CMP segmentation dataset is downloaded fresh via Hugging Face, not stored here)
 ├── notebooks/
-│   └── train_segmentation.ipynb   # Colab training notebook
+│   ├── train_segmentation.ipynb   # Colab training notebook (segmentation)
+│   └── train_detection.ipynb      # Colab training notebook (window/door counting)
 ├── src/
-│   ├── data_loader.py        # dataset loading & mask preprocessing
+│   ├── data_loader.py        # CMP dataset loading & mask preprocessing
 │   ├── model.py               # DeepLabV3 setup (pretrained backbone + fine-tuned head)
-│   ├── train.py               # training loop
+│   ├── train.py               # segmentation training loop
 │   ├── evaluate.py            # IoU, per-class segmentation metrics
-│   └── metrics.py             # WWR, wall-tone, shading-proxy calculations from predicted masks
+│   ├── metrics.py             # WWR, wall-tone, shading-proxy, avg-window-size calculations
+│   ├── detect_model.py        # YOLOv8 setup (wraps ultralytics.YOLO)
+│   ├── detect_train.py        # detection training CLI
+│   └── detect_evaluate.py     # mAP evaluation CLI
 ├── app/
-│   └── streamlit_app.py       # upload facade photo -> visual mask overlay + computed metrics
+│   └── streamlit_app.py       # upload facade photo -> segmentation overlay + detection boxes + metrics
 ├── models/
-│   └── best_model.pt
+│   ├── best_model.pt          # segmentation checkpoint
+│   └── best_detector.pt       # detection checkpoint
 ├── requirements.txt
 └── README.md
 ```
@@ -95,11 +118,22 @@ CPU training is slow; `--max-train-samples` / `--max-val-samples` cap the datase
 python src/evaluate.py --checkpoint models/best_model.pt
 ```
 
+**Train the window/door counter** (recommended: run `notebooks/train_detection.ipynb` on Google Colab for a GPU)
+```bash
+python src/detect_train.py --epochs 50 --imgsz 416 --batch 8
+```
+YOLOv8-nano is far lighter than the segmentation model, so even CPU-only local runs are reasonably fast.
+
+**Evaluate the detector:**
+```bash
+python src/detect_evaluate.py --checkpoint models/best_detector.pt
+```
+
 **Run the demo app locally:**
 ```bash
 streamlit run app/streamlit_app.py
 ```
-Upload a building facade photo → view the segmented overlay (window/wall/shading regions highlighted) plus computed WWR, wall-tone, and shading-proxy values.
+Upload a building facade photo → view the segmented overlay (window/wall/shading regions highlighted), detected window/door boxes with counts, and computed WWR, wall-tone, shading-proxy, and average-window-size values. The app works with just the segmentation checkpoint present — the detector/counting panel only appears once `models/best_detector.pt` exists.
 
 ## Results
 
@@ -131,6 +165,17 @@ Facade, door, and window — the classes WWR depends on most — segment well. S
 
 Earlier local CPU-only smoke run (kept for reference, not representative of the model's real capability): 150 training images, 224×224, ~1 epoch — pixel accuracy 0.475, mean IoU 0.157. The jump to full-dataset/full-resolution/60-epoch GPU training roughly tripled mean IoU, confirming the extra training budget mattered far more than any pipeline issue.
 
+**Window/door detection (counting):** local CPU smoke run, 2 epochs, 320×320, batch 8, on the real 276-image training set (`python src/detect_train.py --epochs 2 --imgsz 320 --device cpu`):
+
+| Metric | Value |
+|---|---|
+| mAP50 | 0.335 |
+| mAP50-95 | 0.195 |
+| Precision | 0.670 |
+| Recall | 0.279 |
+
+mAP50 roughly doubled between epoch 1 (0.17) and epoch 2 (0.335) — a real, expected trajectory for a COCO-pretrained model just starting to specialize, not a converged result. This confirms the detection pipeline (dataset, path resolution, training, evaluation) works correctly end-to-end; a full run via `notebooks/train_detection.ipynb` on a GPU (50-100 epochs) is needed for production-quality counts, the same way the segmentation model needed its full Colab run.
+
 `src/train.py --resume <checkpoint>` can continue training from any saved checkpoint if you want to push these numbers further.
 
 ## What This Project Demonstrates
@@ -145,11 +190,12 @@ Earlier local CPU-only smoke run (kept for reference, not representative of the 
 - Multi-photo input to estimate building orientation and combine multiple facades
 - Compare against ground-truth WWR values (if available) to validate accuracy
 - Extend shading-proxy metric to distinguish shading device *type* (overhang vs. balcony vs. vegetation)
-- Explore YOLO-based bounding-box detection as a lighter-weight alternative, trading precision for speed
+- Full GPU training run for the window/door detector (only a 2-epoch CPU smoke test so far)
+- Post-process detections to merge multi-pane window/glass-door sub-boxes into one count per human-intuitive "window," fixing the known overcounting caveat
 
 ## Tech Stack
 
-Python · PyTorch · torchvision (DeepLabV3) · Hugging Face `datasets` · Streamlit
+Python · PyTorch · torchvision (DeepLabV3) · Ultralytics YOLOv8 · Hugging Face `datasets` · Roboflow · Streamlit
 
 ## License
 

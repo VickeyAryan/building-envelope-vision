@@ -71,6 +71,19 @@ def compute_shading_coverage(mask: np.ndarray, dilation_px: int = 15) -> float:
     return float(min(shaded_window_area / window_area, 1.0))
 
 
+def compute_avg_window_share(wwr: float, window_count: int) -> float | None:
+    """Average window size, expressed as a share of the total facade per window.
+
+    There's no real-world scale reference in a single photo, so this is
+    deliberately relative (WWR divided by count) rather than an absolute
+    area -- consistent with WWR itself already being a ratio, not an
+    absolute measurement. Returns None if no windows were detected.
+    """
+    if window_count <= 0:
+        return None
+    return wwr / window_count
+
+
 def compute_all_metrics(image_rgb: np.ndarray, mask: np.ndarray) -> dict:
     """Bundles all facade metrics for a single image/mask pair."""
     return {

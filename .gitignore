@@ -4,8 +4,13 @@ __pycache__/
 
 data/*
 !data/.gitkeep
+!data/window_door_detection/
 
 models/best_model_partial_backup.pt
 
 .streamlit/
 *.log
+
+# pretrained YOLO base weights auto-downloaded by ultralytics on first use
+/yolov8n.pt
+runs/

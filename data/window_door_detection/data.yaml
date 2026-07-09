@@ -1,0 +1,15 @@
+names:
+- building
+- door
+- gate
+- window
+nc: 4
+roboflow:
+  license: CC BY 4.0
+  project: building-door-gate-window-fd1mm
+  url: https://universe.roboflow.com/aryanisation1-gmail-com/building-door-gate-window-fd1mm/dataset/1
+  version: 1
+  workspace: aryanisation1-gmail-com
+path: .
+train: train/images
+val: valid/images

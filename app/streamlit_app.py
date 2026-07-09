@@ -1,5 +1,7 @@
 """Streamlit demo: upload a building facade photo, get a segmentation overlay
-plus computed WWR / wall-tone / shading-coverage metrics.
+plus computed WWR / wall-tone / shading-coverage metrics, and (if the
+detector checkpoint is trained) window/door counts with an average
+window-size estimate.
 
 Run with:
     streamlit run app/streamlit_app.py
@@ -10,18 +12,22 @@ from pathlib import Path
 import numpy as np
 import streamlit as st
 import torch
-from PIL import Image
+from PIL import Image, ImageDraw
 from torchvision.transforms import functional as TF
 
 SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 sys.path.insert(0, str(SRC_DIR))
 
 from data_loader import CLASS_NAMES, IMAGENET_MEAN, IMAGENET_STD, NUM_CLASSES, PALETTE  # noqa: E402
-from metrics import compute_all_metrics  # noqa: E402
+from detect_model import CLASS_NAMES as DETECT_CLASS_NAMES, count_detections, load_detector  # noqa: E402
+from metrics import compute_all_metrics, compute_avg_window_share  # noqa: E402
 from model import load_checkpoint  # noqa: E402
 
 CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "models" / "best_model.pt"
+DETECTOR_CHECKPOINT_PATH = Path(__file__).resolve().parent.parent / "models" / "best_detector.pt"
 IMAGE_SIZE = 384
+DETECT_CONF = 0.25
+DETECT_BOX_COLORS = {"window": (42, 120, 214), "door": (230, 73, 72), "building": (237, 161, 0), "gate": (74, 58, 167)}
 
 
 @st.cache_resource
@@ -29,6 +35,29 @@ def get_model():
     if not CHECKPOINT_PATH.exists():
         return None
     return load_checkpoint(str(CHECKPOINT_PATH), num_classes=NUM_CLASSES, device="cpu")
+
+
+@st.cache_resource
+def get_detector():
+    if not DETECTOR_CHECKPOINT_PATH.exists():
+        return None
+    return load_detector(str(DETECTOR_CHECKPOINT_PATH))
+
+
+def draw_detections(image: Image.Image, results) -> Image.Image:
+    annotated = image.copy()
+    draw = ImageDraw.Draw(annotated)
+    boxes = results.boxes
+    if boxes is None:
+        return annotated
+    for xyxy, cls_idx, conf in zip(boxes.xyxy.tolist(), boxes.cls.tolist(), boxes.conf.tolist()):
+        if conf < DETECT_CONF:
+            continue
+        name = DETECT_CLASS_NAMES[int(cls_idx)]
+        color = DETECT_BOX_COLORS.get(name, (255, 255, 255))
+        draw.rectangle(xyxy, outline=color, width=3)
+        draw.text((xyxy[0] + 3, max(xyxy[1] - 14, 0)), name, fill=color)
+    return annotated
 
 
 def preprocess(image: Image.Image) -> torch.Tensor:
@@ -61,13 +90,20 @@ def main():
     )
 
     model = get_model()
+    detector = get_detector()
     if model is None:
         st.warning(
-            f"No trained model checkpoint found at `{CHECKPOINT_PATH}`. "
+            f"No trained segmentation checkpoint found at `{CHECKPOINT_PATH}`. "
             "Train one with `notebooks/train_segmentation.ipynb` (recommended: "
             "Google Colab) or `python src/train.py`, then re-run this app."
         )
         return
+    if detector is None:
+        st.info(
+            f"No trained window/door detector found at `{DETECTOR_CHECKPOINT_PATH}` — "
+            "counts won't be shown. Train one with `notebooks/train_detection.ipynb` "
+            "or `python src/detect_train.py`."
+        )
 
     uploaded = st.file_uploader("Upload a facade photo", type=["jpg", "jpeg", "png"])
     if uploaded is None:
@@ -84,13 +120,28 @@ def main():
     color_mask = mask_to_color(pred_mask)
     overlay_image = overlay(resized_image, color_mask)
 
-    col1, col2 = st.columns(2)
+    counts = None
+    detection_image = None
+    if detector is not None:
+        results = detector.predict(resized_image, conf=DETECT_CONF, verbose=False)[0]
+        counts = count_detections(results, conf=DETECT_CONF)
+        detection_image = draw_detections(resized_image, results)
+
+    if detection_image is not None:
+        col1, col2, col3 = st.columns(3)
+    else:
+        col1, col2 = st.columns(2)
+        col3 = None
     with col1:
         st.subheader("Original")
         st.image(resized_image, use_container_width=True)
     with col2:
         st.subheader("Segmentation overlay")
         st.image(overlay_image, use_container_width=True)
+    if col3 is not None:
+        with col3:
+            st.subheader("Detected windows/doors")
+            st.image(detection_image, use_container_width=True)
 
     st.subheader("Legend")
     legend_cols = st.columns(len(CLASS_NAMES))
@@ -111,6 +162,23 @@ def main():
         f"{wall_tone:.0f}" if wall_tone is not None else "n/a (no wall detected)",
     )
     m3.metric("Shading coverage (near windows)", f"{metrics['shading_coverage']:.1%}")
+
+    if counts is not None:
+        st.subheader("Window & door counts")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Windows detected", counts["window"])
+        c2.metric("Doors detected", counts["door"])
+        avg_share = compute_avg_window_share(metrics["wwr"], counts["window"])
+        c3.metric(
+            "Avg. window size (share of facade)",
+            f"{avg_share:.1%}" if avg_share is not None else "n/a (no windows detected)",
+        )
+        st.caption(
+            "Counts come from a separate object-detection model (not the segmentation "
+            "model above). Note: some multi-pane windows or glass doors may be counted "
+            "as several boxes rather than one, so counts can run high on glass-heavy "
+            "facades — see the README for details."
+        )
 
     st.caption(
         "These are visually-derived proxies, not a full energy audit — see the "

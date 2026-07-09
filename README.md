@@ -165,16 +165,29 @@ Facade, door, and window — the classes WWR depends on most — segment well. S
 
 Earlier local CPU-only smoke run (kept for reference, not representative of the model's real capability): 150 training images, 224×224, ~1 epoch — pixel accuracy 0.475, mean IoU 0.157. The jump to full-dataset/full-resolution/60-epoch GPU training roughly tripled mean IoU, confirming the extra training budget mattered far more than any pipeline issue.
 
-**Window/door detection (counting):** local CPU smoke run, 2 epochs, 320×320, batch 8, on the real 276-image training set (`python src/detect_train.py --epochs 2 --imgsz 320 --device cpu`):
+**Window/door detection (counting):** 30-epoch run on Google Colab (T4 GPU), 416×416, batch 16, via `notebooks/train_detection.ipynb`.
+
+Evaluated on the 48-image validation split (`python src/detect_evaluate.py --imgsz 416`):
 
 | Metric | Value |
 |---|---|
-| mAP50 | 0.335 |
-| mAP50-95 | 0.195 |
-| Precision | 0.670 |
-| Recall | 0.279 |
+| mAP50 | 0.663 |
+| mAP50-95 | 0.443 |
+| Precision | 0.744 |
+| Recall | 0.598 |
 
-mAP50 roughly doubled between epoch 1 (0.17) and epoch 2 (0.335) — a real, expected trajectory for a COCO-pretrained model just starting to specialize, not a converged result. This confirms the detection pipeline (dataset, path resolution, training, evaluation) works correctly end-to-end; a full run via `notebooks/train_detection.ipynb` on a GPU (50-100 epochs) is needed for production-quality counts, the same way the segmentation model needed its full Colab run.
+| Class | mAP50 |
+|---|---|
+| building | 0.856 |
+| gate | 0.669 |
+| window | 0.615 |
+| door | 0.510 |
+
+On a real validation photo, the model now correctly counts every object (1 building, 2 doors, 6 windows — an exact match to ground truth), versus the earlier 2-epoch smoke test which found only 1 window and 0 doors on the same image. Gate has the fewest training examples (69 boxes total) so its mAP is noisier than the others despite the relatively high number.
+
+Earlier local CPU-only smoke run (kept for reference): 2 epochs, 320×320 — mAP50 0.335, mAP50-95 0.195, recall 0.279. The jump to 30 epochs on a GPU roughly doubled mAP50 and more than doubled recall, the same pattern seen with the segmentation model's full training run mattering more than any pipeline change.
+
+`src/detect_train.py` doesn't currently support `--resume`; a longer run (e.g. 100 epochs, the notebook's default) could push these numbers further.
 
 `src/train.py --resume <checkpoint>` can continue training from any saved checkpoint if you want to push these numbers further.
 
@@ -190,7 +203,7 @@ mAP50 roughly doubled between epoch 1 (0.17) and epoch 2 (0.335) — a real, exp
 - Multi-photo input to estimate building orientation and combine multiple facades
 - Compare against ground-truth WWR values (if available) to validate accuracy
 - Extend shading-proxy metric to distinguish shading device *type* (overhang vs. balcony vs. vegetation)
-- Full GPU training run for the window/door detector (only a 2-epoch CPU smoke test so far)
+- Longer detector training (100+ epochs) to push mAP further, and `--resume` support in `detect_train.py` for chaining runs
 - Post-process detections to merge multi-pane window/glass-door sub-boxes into one count per human-intuitive "window," fixing the known overcounting caveat
 
 ## Tech Stack
